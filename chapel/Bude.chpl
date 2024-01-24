@@ -29,7 +29,7 @@ module Bude {
   const NPPDIST: real(32) = 1.0;
 
   // Configurations
-  config param NUM_TD_PER_THREAD: int(32) = 4; // Work per core
+  config param NUM_TD_PER_THREAD: int = 4; // Work per core
 
   record atom {
     var x, y, z: real(32);
@@ -223,7 +223,7 @@ module Bude {
   proc gpukernel(context: params, results: [] real(32)) {
     const ngpu = here.gpus.size;
     var times: [0..<ngpu] real;
-    coforall (gpu, gpuID) in zip(here.gpus, here.gpus.domain) do on gpu {
+    coforall (gpu, gpuID) in zip(here.gpus, here.gpus.domain) with (ref times) do on gpu {
       const iterations = context.iterations: int(32);
       const nposes = (context.nposes / ngpu) : int(32);
       const natlig = context.natlig: int(32);
@@ -233,7 +233,7 @@ module Bude {
       const protein = context.protein;
       const ligand = context.ligand;
       const forcefield = context.forcefield;
-      const poses: [0..<6:int(32), 0..<nposes] real(32) = context.poses[.., gpuID*nposes..<(gpuID+1)*nposes];
+      const poses: [0:int(32)..<6:int(32), 0..<nposes] real(32) = context.poses[{0..<6, gpuID*nposes..<(gpuID+1)*nposes}];
       var buffer: [0..<nposes] real(32);
 
       times[gpuID] = timestampMS();
@@ -431,11 +431,11 @@ module Bude {
     forcefield: [] ffParams,
     group: int(32)) {
 
-    var transform: [0..<3:int(32), 0..<4:int(32), 0..<NUM_TD_PER_THREAD] real(32) = noinit;
+    var transform: [0:int(32)..<3:int(32), 0:int(32)..<4:int(32), 0:int(32)..<NUM_TD_PER_THREAD:int(32)] real(32) = noinit;
     var etot: [0..<NUM_TD_PER_THREAD] real(32) = noinit;
 
     // Compute transformation matrix
-    foreach i in 0..<NUM_TD_PER_THREAD {
+    foreach i in 0:int(32)..<NUM_TD_PER_THREAD:int(32) {
       const ix = group*NUM_TD_PER_THREAD + i;
       const sx = sin(transforms(0, ix));
       const cx = cos(transforms(0, ix));
@@ -470,7 +470,7 @@ module Bude {
       var lpos_y: [0..<NUM_TD_PER_THREAD] real(32) = noinit;
       var lpos_z: [0..<NUM_TD_PER_THREAD] real(32) = noinit;
 
-      foreach l in 0..<NUM_TD_PER_THREAD {
+      foreach l in 0:int(32)..<NUM_TD_PER_THREAD:int(32) {
         lpos_x[l] = transform(0, 3, l)
           + l_atom.x * transform(0, 0, l)
           + l_atom.y * transform(0, 1, l)
