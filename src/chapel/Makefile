@@ -41,8 +41,8 @@ endif
 CHPL = chpl
 
 # -------
-EXE = bude
-.PHONY: all $(EXE) clean
+EXE = chapel-bude
+.PHONY: all $(BENCHMARK_EXE) clean
 
 all: $(EXE)
 
