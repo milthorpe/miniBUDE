@@ -7,14 +7,14 @@ MAKEFLAGS += --warn-undefined-variables --no-builtin-rules
 
 PPWI=4
 OPTIONS = 
-CHPL_FLAGS=--detailed-errors --savec tmp --print-commands
+CHPL_FLAGS=-s PPWI=$(PPWI) --detailed-errors --savec tmp --print-commands
 CHPL_SOURCE=Bude.chpl
 ifeq ($(CHPL_LOCALE_MODEL),gpu)
 # GPU version
 ifndef CHPL_GPU
 $(error CHPL_GPU not defined)
 else
-CHPL_FLAGS+=-s PPWI=$(PPWI) --report-gpu -suseGPU=true --ldflags -no-pie
+CHPL_FLAGS+=--report-gpu -suseGPU=true --ldflags -no-pie
 CHPL_SOURCE+=DeviceDetails.h
 ifeq ($(CHPL_GPU),nvidia)
 CHPL_SOURCE+=DeviceDetails_cu.o
