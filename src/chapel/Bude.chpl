@@ -8,12 +8,16 @@ module Bude {
   use Path;
   use ChplConfig;
 
+  config param VERSION_STRING = "2.0";
+  config param MINIBUDE_COMPILE_COMMANDS = "";
+  config param useGPU = false;
+
   // Program context parameters
   param DEFAULT_ITERS = 8;
   param DEFAULT_NPOSES = 65536;
-  param DEFAULT_WGSIZE = 64;
+  param DEFAULT_WGSIZE = 1;
   param REF_NPOSES = 65536;
-  param DATA_DIR = "../data/bm1";
+  param DATA_DIR = "../../data/bm1";
   param FILE_LIGAND = "/ligand.in";
   param FILE_PROTEIN = "/protein.in";
   param FILE_FORCEFIELD = "/forcefield.in";
@@ -29,7 +33,8 @@ module Bude {
   const NPPDIST: real(32) = 1.0;
 
   // Configurations
-  config param NUM_TD_PER_THREAD: int = 4; // Work per core
+  config param PPWI: int = 4; // "poses per work item" = work per Chapel task
+  // TODO allow multiple choices for PPWI
 
   record atom {
     var x, y, z: real(32);
@@ -59,39 +64,68 @@ module Bude {
     var forcefield: [forcefieldDomain] ffParams;
     var poses: [posesDomain] real(32);
 
+    var list: bool;
+    var deviceIndex: int(32);
+
     proc init() { }
 
     proc load(args: [] string) throws {
       // Parsing command-line parameters
       var parser = new argumentParser();
-      var iterationsArg = parser.addOption(name="iterations"
-        , opts=["-i", "--iteartions"]
-        , defaultValue=DEFAULT_ITERS: string
-        , valueName="I"
-        , help="Repeat kernel I times (default: " + DEFAULT_ITERS: string + ")");
-      var deckArg = parser.addOption(name="deck"
-        , opts=["--deck"]
-        , defaultValue=DATA_DIR
-        , valueName="DECK"
-        , help="Use the DECK directory as input deck (default: " + DATA_DIR + ")");
-      var numposesArg = parser.addOption(name="numposes"
-        , opts=["-n", "--numposes"]
-        , defaultValue=DEFAULT_NPOSES: string
-        , valueName="N"
-        , help="Compute energies for N poses (default: " + DEFAULT_NPOSES: string + ")");
-      var wgsizeArg = parser.addOption(name="wgsize"
-        , opts=["-w", "--wgsize"]
-        , defaultValue=DEFAULT_WGSIZE: string
-        , valueName="W"
-        , help="Set the number of blocks to W (default: " + DEFAULT_WGSIZE: string + ")");
+
+      var listArg = parser.addFlag(name="list",
+        opts=["-l", "--list"],
+        defaultValue=false,
+        help="List available devices");
+
+      var deviceArg = parser.addOption(name="device",
+        opts=["-d", "--device"],
+        defaultValue=0: string,
+        valueName="INDEX",
+        help="""Select device at INDEX from output of --list
+                        [optional] default=0""");
+      var iterationsArg = parser.addOption(name="iterations",
+        opts=["-i", "--iter"],
+        defaultValue=DEFAULT_ITERS: string,
+        valueName="I",
+        help="""Repeat kernel I times\n
+                        [optional] default=""" + DEFAULT_ITERS: string);
+      var numposesArg = parser.addOption(name="numposes",
+        opts=["-n", "--poses"],
+        defaultValue=DEFAULT_NPOSES: string,
+        valueName="N",
+        help="""Compute energies for only N poses, use 0 for deck max
+                        [optional] default=0""");
+      var wgsizeArg = parser.addOption(name="wgsize",
+        opts=["-w", "--wgsize"],
+        defaultValue=DEFAULT_WGSIZE: string,
+        valueName="WGSIZE",
+        help="""A CSV list of work-group sizes, not all implementations support this parameter
+                        [optional] default=""" + DEFAULT_WGSIZE: string);
+      var deckArg = parser.addOption(name="deck",
+        opts=["--deck"],
+        defaultValue=DATA_DIR,
+        valueName="DIR",
+        help="""Use the DIR directory as input deck
+                        [optional] default=""" + DATA_DIR);
       parser.parseArgs(args);
 
       // Store these parameters
+      this.list = listArg.valueAsBool();
+
       try {
         this.iterations = iterationsArg.value(): int(32);
         if (this.iterations < 0) then throw new Error();
       } catch {
         writeln("Invalid number of iterations");
+        exit(1);
+      }
+
+      try {
+        this.deviceIndex = deviceArg.value(): int(32);
+        if (this.deviceIndex < 0) then throw new Error();
+      } catch {
+        writeln("Invalid device index");
         exit(1);
       }
 
@@ -167,16 +201,65 @@ module Bude {
 
   var context: params = new params();
 
+  extern proc get_device_driver_version(const deviceIndex: int(32)): int(32);
+  extern proc get_device_name(const deviceIndex: int(32)): c_ptrConst(c_char);
+
+  proc getDeviceName(deviceIndex: int(32)): string {
+      const deviceName = get_device_name(deviceIndex);
+      return try! string.createBorrowingBuffer(deviceName);
+  }
+
+  proc enumerateDevices() {
+    if useGPU {
+      return [deviceId in 0..#here.gpus.size] (deviceId, getDeviceName(deviceId: int(32)));
+    } else {
+      return [(0, "Chapel CPU")];
+    }
+  }
+
   proc main(args: [] string) {
     try! context.load(args);
 
-    // Show meta-information
-    writeln("");
-    writeln("Poses     : ", context.nposes);
-    writeln("Iterations: ", context.iterations);
-    writeln("Ligands   : ", context.natlig);
-    writeln("Proteins  : ", context.natpro);
-    writeln("Deck      : ", context.deckDir);
+    writeln("miniBUDE:  ", VERSION_STRING);
+    writeln("compile_commands:");
+    writeln("   - \"", MINIBUDE_COMPILE_COMMANDS, "\"");
+    // TODO VCS info
+    // TODO CPU info
+
+    writeln("~");
+    const now = timeSinceEpoch().totalSeconds();
+    writef("time: { epoch_s: %i, formatted: \"%s\" }\n", now, dateTime.createFromTimestamp(now):string);
+
+    writeln("deck:");
+    writeln("  path:         \"", context.deckDir, "\"");
+    writeln("  poses:        ", context.nposes); // TODO maxposes
+    writeln("  proteins:     ", context.natpro);
+    writeln("  ligands:      ", context.natlig);
+    writeln("  forcefields:  ", context.ntypes);
+    writeln("config:");
+    writeln("  iterations:   ", context.iterations);
+    writeln("  poses:        ", context.nposes);
+    writeln("  ppwi:");
+    writeln("    available:  [", PPWI, "]");
+    writeln("    selected:   [", PPWI, "]");
+    writeln("  wgsize:       [", context.wgsize, "]");
+
+    const devices = enumerateDevices();
+    if devices.size == 0 {
+      try! stderr.writeln(" # (no devices available)");
+    } else {
+      if context.list {
+        writeln("devices:");
+        for device in devices {
+          writeln("  ", device(0), ": \"", device(1), "\"");
+        }
+        exit(0);
+      } else {
+        if context.deviceIndex >= 0 && context.deviceIndex < devices.size {
+          writeln("device: { index: ", context.deviceIndex, ", name: \"", devices(context.deviceIndex)(1), "\" }");
+        } 
+      }
+    }
 
     // Compute
     var energies: [0..<context.nposes] real(32);
@@ -207,7 +290,7 @@ module Bude {
     writef("\nLargest difference was %{.###}%%.\n\n", 100 * maxdiff);
   } // main
 
-  proc compute(results: [] real(32)) {
+  proc compute(ref results: [] real(32)) {
     if (CHPL_GPU == "nvidia" || CHPL_GPU == "amd") {
       writeln("\nRunning Chapel on ", here.gpus.size, (if here.gpus.size > 1 then " GPUs" else " GPU"));
       gpukernel(context, results);
@@ -238,13 +321,13 @@ module Bude {
 
       times[gpuID] = timestampMS();
       for i in 0..<iterations {
-        foreach ii in 0..<nposes/NUM_TD_PER_THREAD {
+        foreach ii in 0..<nposes/PPWI {
           __primitive("gpu set blockSize", wgsize);
-          const ind = ii * NUM_TD_PER_THREAD;
-          var etot: NUM_TD_PER_THREAD * real(32);
-          var transform: NUM_TD_PER_THREAD * (3 * (4 * real(32)));
+          const ind = ii * PPWI;
+          var etot: PPWI * real(32);
+          var transform: PPWI * (3 * (4 * real(32)));
 
-          for param jj in 0..<NUM_TD_PER_THREAD {
+          for param jj in 0..<PPWI {
             const ix = ind + jj;
             // Compute transformation matrix
             const sx = sin(poses(0, ix));
@@ -266,20 +349,22 @@ module Bude {
             transform(jj)(2)(2) = cx*cy;
             transform(jj)(2)(3) = poses(5, ix);
             etot[jj] = 0.0;
-          } // for jj in 0..<NUM_TD_PER_THREAD
+          } // for jj in 0..<PPWI
 
+          // Loop over ligand atoms
           for il in 0..<natlig {
+            // Load ligand atom data
             const l_atom = ligand[il];
             const l_params = forcefield[l_atom.aType];
             const lhphb_ltz = l_params.hphb < 0.0;
             const lhphb_gtz = l_params.hphb > 0.0;
 
             // Transform ligand atom
-            var lpos_x: NUM_TD_PER_THREAD * real(32);
-            var lpos_y: NUM_TD_PER_THREAD * real(32);
-            var lpos_z: NUM_TD_PER_THREAD * real(32);
+            var lpos_x: PPWI * real(32);
+            var lpos_y: PPWI * real(32);
+            var lpos_z: PPWI * real(32);
 
-            for param jj in 0..<NUM_TD_PER_THREAD {
+            for param jj in 0..<PPWI {
               lpos_x[jj] = transform(jj)(0)(3)
                 + l_atom.x * transform(jj)(0)(0)
                 + l_atom.y * transform(jj)(0)(1)
@@ -294,7 +379,7 @@ module Bude {
                 + l_atom.x * transform(jj)(2)(0)
                 + l_atom.y * transform(jj)(2)(1)
                 + l_atom.z * transform(jj)(2)(2);
-            } // foreach jj in 0..<NUM_TD_PER_THREAD
+            } // foreach jj in 0..<PPWI
 
             for ip in 0..< natpro {
               const p_atom = protein[ip];
@@ -340,7 +425,7 @@ module Bude {
               const chrg_init = l_params.elsc * p_params.elsc;
               const dslv_init = p_hphb + l_hphb; 
               
-              for param jj in 0..<NUM_TD_PER_THREAD {
+              for param jj in 0..<PPWI {
                 const x = lpos_x[jj] - p_atom.x;
                 const y = lpos_y[jj] - p_atom.y;
                 const z = lpos_z[jj] - p_atom.z;
@@ -373,13 +458,13 @@ module Bude {
 
                 dslv_e *= if zone1 then 1.0: real(32) else coeff;
                 etot[jj] += dslv_e;                  
-              } // foreach jj in 0..<NUM_TD_PER_THREAD
+              } // foreach jj in 0..<PPWI
             } // foreach ip in 0..< context.natpro
           } // foreach il in 0..<context.natlig
-          for param jj in 0..<NUM_TD_PER_THREAD {
+          for param jj in 0..<PPWI {
             buffer[ind+jj] = etot[jj] * 0.5;
           }
-        } // foreach ii in 0..<context.nposes/NUM_TD_PER_THREAD
+        } // foreach ii in 0..<context.nposes/PPWI
         results[gpuID*nposes..<(gpuID+1)*nposes] = buffer;
       } // for iter in 0..<iterations
       times[gpuID] = timestampMS() - times[gpuID];
@@ -388,7 +473,7 @@ module Bude {
     printTimings(max reduce times);
   }
 
-  proc cpukernel(context: params, results: [] real(32)) {
+  proc cpukernel(ref context: params, ref results: [] real(32)) {
     var buffer: [0..<context.nposes] real(32); 
     var poses = context.poses;
     var protein = context.protein;
@@ -400,7 +485,7 @@ module Bude {
     const nposes = context.nposes: int(32);
 
     // Warm-up
-    forall group in 0..<nposes/NUM_TD_PER_THREAD {
+    forall group in 0..<nposes/PPWI {
       fasten_main(natlig, natpro, protein, ligand,
                   poses, buffer, forcefield, group: int(32));
     }
@@ -408,7 +493,7 @@ module Bude {
     // Core part of computing
     const start: real = timestampMS();
     for itr in 0..<context.iterations {
-      forall group in 0..<nposes / NUM_TD_PER_THREAD {
+      forall group in 0..<nposes / PPWI {
         fasten_main(natlig, natpro, protein, ligand,
                   poses, buffer, forcefield, group: int(32));
       }
@@ -431,12 +516,12 @@ module Bude {
     forcefield: [] ffParams,
     group: int(32)) {
 
-    var transform: [0:int(32)..<3:int(32), 0:int(32)..<4:int(32), 0:int(32)..<NUM_TD_PER_THREAD:int(32)] real(32) = noinit;
-    var etot: [0..<NUM_TD_PER_THREAD] real(32) = noinit;
+    var transform: [0:int(32)..<3:int(32), 0:int(32)..<4:int(32), 0:int(32)..<PPWI:int(32)] real(32) = noinit;
+    var etot: [0..<PPWI] real(32) = noinit;
 
     // Compute transformation matrix
-    foreach i in 0:int(32)..<NUM_TD_PER_THREAD:int(32) {
-      const ix = group*NUM_TD_PER_THREAD + i;
+    foreach i in 0:int(32)..<PPWI:int(32) {
+      const ix = group*PPWI + i;
       const sx = sin(transforms(0, ix));
       const cx = cos(transforms(0, ix));
       const sy = sin(transforms(1, ix));
@@ -459,18 +544,20 @@ module Bude {
       etot[i] = 0.0;
     }
     
+    // Loop over ligand atoms
     foreach il in 0..<natlig {
+      // Load ligand atom data
       const l_atom = ligand[il];
       const l_params = forcefield[l_atom.aType];
       const lhphb_ltz = l_params.hphb < 0.0;
       const lhphb_gtz = l_params.hphb > 0.0;
 
       // Transform ligand atom
-      var lpos_x: [0..<NUM_TD_PER_THREAD] real(32) = noinit;
-      var lpos_y: [0..<NUM_TD_PER_THREAD] real(32) = noinit;
-      var lpos_z: [0..<NUM_TD_PER_THREAD] real(32) = noinit;
+      var lpos_x: [0..<PPWI] real(32) = noinit;
+      var lpos_y: [0..<PPWI] real(32) = noinit;
+      var lpos_z: [0..<PPWI] real(32) = noinit;
 
-      foreach l in 0:int(32)..<NUM_TD_PER_THREAD:int(32) {
+      foreach l in 0:int(32)..<PPWI:int(32) {
         lpos_x[l] = transform(0, 3, l)
           + l_atom.x * transform(0, 0, l)
           + l_atom.y * transform(0, 1, l)
@@ -487,7 +574,9 @@ module Bude {
           + l_atom.z * transform(2, 2, l);
       }
 
+    // Loop over protein atoms
       foreach ip in 0..<natpro {
+        // Load protein atom data
         const p_atom = protein(ip);
         const p_params = forcefield(p_atom.aType);
 
@@ -531,7 +620,7 @@ module Bude {
         const chrg_init = l_params.elsc * p_params.elsc;
         const dslv_init = p_hphb + l_hphb; 
 
-        foreach l in 0..<NUM_TD_PER_THREAD {
+        foreach l in 0..<PPWI {
           // Calculate distance between atoms
           const x = lpos_x(l) - p_atom.x;
           const y = lpos_y(l) - p_atom.y;
@@ -572,7 +661,7 @@ module Bude {
       }
     }
 
-    results[group * NUM_TD_PER_THREAD..<(group + 1) * NUM_TD_PER_THREAD] = 0.5 : real(32) * etot;
+    results[group * PPWI..<(group + 1) * PPWI] = 0.5 : real(32) * etot;
   }
 
   proc openFile(fileName: string, ref length: int): file {
@@ -594,8 +683,8 @@ module Bude {
     const ms = timeMS / context.iterations;
     const runtime = ms * 1e-3;
 
-    const ops_per_wg = NUM_TD_PER_THREAD * 27 + context.natlig * (2 + NUM_TD_PER_THREAD * 18 + context.natpro * (10 + NUM_TD_PER_THREAD * 30)) + NUM_TD_PER_THREAD;
-    const total_ops = ops_per_wg * (context.nposes / NUM_TD_PER_THREAD);
+    const ops_per_wg = PPWI * 27 + context.natlig * (2 + PPWI * 18 + context.natpro * (10 + PPWI * 30)) + PPWI;
+    const total_ops = ops_per_wg * (context.nposes / PPWI);
     const flops = total_ops / runtime;
     const gflops = flops / 1e9;
 
