@@ -31,9 +31,15 @@ module Bude {
   param HARDNESS: real(32) = 38.0;
   param NPNPDIST: real(32) = 5.5;
   param NPPDIST: real(32) = 1.0;
+  param ZERO: real(32) = 0.0;
+  param QUARTER: real(32) = 0.25;
+  param HALF: real(32) = 0.5;
+  param ONE: real(32) = 1.0;
+  param TWO: real(32) = 2.0;
+  param FOUR: real(32) = 4.0;
 
   // Configurations
-  config param PPWI: int = 4; // "poses per work item" = work per Chapel task
+  config param PPWI: int(32) = 4; // "poses per work item" = work per Chapel task
   // TODO allow multiple choices for PPWI
 
   record atom {
@@ -327,7 +333,7 @@ module Bude {
           var etot: PPWI * real(32);
           var transform: PPWI * (3 * (4 * real(32)));
 
-          for param jj in 0..<PPWI {
+          for param jj in 0:int(32)..<PPWI {
             const ix = ind + jj;
             // Compute transformation matrix
             const sx = sin(poses(0, ix));
@@ -348,23 +354,23 @@ module Bude {
             transform(jj)(2)(1) = sx*cy;
             transform(jj)(2)(2) = cx*cy;
             transform(jj)(2)(3) = poses(5, ix);
-            etot[jj] = 0.0;
-          } // for jj in 0..<PPWI
+            etot[jj] = ZERO;
+          } // for param jj in 0:int(32)..<PPWI
 
           // Loop over ligand atoms
           for il in 0..<natlig {
             // Load ligand atom data
             const l_atom = ligand[il];
             const l_params = forcefield[l_atom.aType];
-            const lhphb_ltz = l_params.hphb < 0.0;
-            const lhphb_gtz = l_params.hphb > 0.0;
+            const lhphb_ltz = l_params.hphb < ZERO;
+            const lhphb_gtz = l_params.hphb > ZERO;
 
             // Transform ligand atom
             var lpos_x: PPWI * real(32);
             var lpos_y: PPWI * real(32);
             var lpos_z: PPWI * real(32);
 
-            for param jj in 0..<PPWI {
+            for param jj in 0:int(32)..<PPWI {
               lpos_x[jj] = transform(jj)(0)(3)
                 + l_atom.x * transform(jj)(0)(0)
                 + l_atom.y * transform(jj)(0)(1)
@@ -379,24 +385,24 @@ module Bude {
                 + l_atom.x * transform(jj)(2)(0)
                 + l_atom.y * transform(jj)(2)(1)
                 + l_atom.z * transform(jj)(2)(2);
-            } // foreach jj in 0..<PPWI
+            } // for param jj in 0:int(32)..<PPWI
 
-            for ip in 0..< natpro {
+            for ip in 0..<natpro {
               const p_atom = protein[ip];
               const p_params = forcefield[p_atom.aType];
 
               const radij = p_params.radius + l_params.radius;
-              const r_radij = 1.0 / radij;
+              const r_radij = ONE / radij;
 
               const elcdst = if
                 p_params.hbtype == HBTYPE_F && l_params.hbtype == HBTYPE_F
-                then 4.0: real(32)
-                else 2.0: real(32);
+                then FOUR
+                else TWO;
 
               const elcdst1 = if
                 p_params.hbtype == HBTYPE_F && l_params.hbtype == HBTYPE_F
-                then 0.25: real(32)
-                else 0.5: real(32);
+                then QUARTER
+                else HALF;
 
               const type_E = p_params.hbtype == HBTYPE_E || l_params.hbtype == HBTYPE_E;
               const phphb_ltz = p_params.hphb <  0;
@@ -404,10 +410,10 @@ module Bude {
               const phphb_nz  = p_params.hphb != 0;
 
               const p_hphb = p_params.hphb 
-                * if phphb_ltz && lhphb_gtz then -1.0: real(32) else 1.0: real(32);
+                * if phphb_ltz && lhphb_gtz then -ONE else ONE;
 
               const l_hphb = l_params.hphb 
-                * if phphb_gtz && lhphb_ltz then -1.0: real(32) else 1.0: real(32);
+                * if phphb_gtz && lhphb_ltz then -ONE else ONE;
 
               const distdslv =
                 if phphb_ltz
@@ -421,50 +427,51 @@ module Bude {
                   else -max(real(32))
                 );
 
-              const r_distdslv = 1.0 / distdslv;
+              const r_distdslv = ONE / distdslv;
               const chrg_init = l_params.elsc * p_params.elsc;
               const dslv_init = p_hphb + l_hphb; 
               
-              for param jj in 0..<PPWI {
+              for param jj in 0:int(32)..<PPWI {
                 const x = lpos_x[jj] - p_atom.x;
                 const y = lpos_y[jj] - p_atom.y;
                 const z = lpos_z[jj] - p_atom.z;
                 const distij = sqrt(x*x + y*y + z*z);
 
                 const distbb = distij - radij;
-                const zone1 = distbb < 0.0;
+                const zone1 = distbb < ZERO;
 
-                etot[jj] += (1.0: real(32) - distij * r_radij) * (if zone1 then 2.0: real(32)*HARDNESS else 0.0);
+                etot[jj] += (ONE - distij * r_radij) * (if zone1 then TWO*HARDNESS else ZERO);
 
                 // Calculate formal and dipole charge interactions
                 var chrg_e =
                   chrg_init * (
                     if zone1 
-                    then 1.0: real(32)
-                      else 1.0: real(32) - distbb * elcdst1
+                    then ONE
+                      else ONE - distbb * elcdst1
                   ) * (
                     if distbb < elcdst 
-                    then 1.0: real(32)
-                    else 0.0: real(32)
+                    then ONE
+                    else ZERO
                   );
                 
                 var neg_chrg_e = -abs(chrg_e);
                 chrg_e = if type_E then neg_chrg_e else chrg_e;
                 etot[jj] += chrg_e * CNSTNT;
 
-                const coeff = 1.0 - distbb * r_distdslv;
+                const coeff = ONE - distbb * r_distdslv;
                 var dslv_e = dslv_init 
-                  * if distbb < distdslv && phphb_nz then 1.0: real(32) else 0.0: real(32);
+                  * if distbb < distdslv && phphb_nz then ONE else ZERO;
 
-                dslv_e *= if zone1 then 1.0: real(32) else coeff;
+                dslv_e *= if zone1 then ONE else coeff;
                 etot[jj] += dslv_e;                  
-              } // foreach jj in 0..<PPWI
-            } // foreach ip in 0..< context.natpro
-          } // foreach il in 0..<context.natlig
-          for param jj in 0..<PPWI {
-            buffer[ind+jj] = etot[jj] * 0.5;
+              } // for param jj in 0:int(32)..<PPWI
+            } // for ip in 0..<natpro
+          } // for il in 0..<natlig
+
+          for param jj in 0:int(32)..<PPWI {
+            buffer[ind+jj] = etot[jj] * HALF;
           }
-        } // foreach ii in 0..<context.nposes/PPWI
+        } // foreach ii in 0..<nposes/PPWI
         results[gpuID*nposes..<(gpuID+1)*nposes] = buffer;
       } // for iter in 0..<iterations
       times[gpuID] = timestampMS() - times[gpuID];
@@ -506,21 +513,21 @@ module Bude {
     printTimings(end - start);
   }
 
-  private proc fasten_main(
-    natlig: int(32),
-    natpro: int(32),
-    protein: [] atom,
-    ligand: [] atom,
-    transforms: [] real(32),
-    results: [] real(32),
-    forcefield: [] ffParams,
-    group: int(32)) {
+  private proc fasten_main (
+    const in natlig: int(32),
+    const in natpro: int(32),
+    const ref protein: [] atom,
+    const ref ligand: [] atom,
+    const ref transforms: [] real(32),
+    ref results: [] real(32),
+    const ref forcefield: [] ffParams,
+    const in group: int(32)) {
 
-    var transform: [0:int(32)..<3:int(32), 0:int(32)..<4:int(32), 0:int(32)..<PPWI:int(32)] real(32) = noinit;
-    var etot: [0..<PPWI] real(32) = noinit;
+    var transform: [0:int(32)..<3:int(32), 0:int(32)..<4:int(32), 0:int(32)..<PPWI] real(32) = noinit;
+    var etot: [0:int(32)..<PPWI] real(32) = noinit;
 
     // Compute transformation matrix
-    foreach i in 0:int(32)..<PPWI:int(32) {
+    foreach i in 0:int(32)..<PPWI {
       const ix = group*PPWI + i;
       const sx = sin(transforms(0, ix));
       const cx = cos(transforms(0, ix));
@@ -541,23 +548,23 @@ module Bude {
       transform(2, 2, i) = cx*cy;
       transform(2, 3, i) = transforms(5, ix);
 
-      etot[i] = 0.0;
+      etot[i] = ZERO;
     }
     
     // Loop over ligand atoms
-    foreach il in 0..<natlig {
+    for il in 0..<natlig {
       // Load ligand atom data
       const l_atom = ligand[il];
       const l_params = forcefield[l_atom.aType];
-      const lhphb_ltz = l_params.hphb < 0.0;
-      const lhphb_gtz = l_params.hphb > 0.0;
+      const lhphb_ltz = l_params.hphb < ZERO;
+      const lhphb_gtz = l_params.hphb > ZERO;
 
       // Transform ligand atom
-      var lpos_x: [0..<PPWI] real(32) = noinit;
-      var lpos_y: [0..<PPWI] real(32) = noinit;
-      var lpos_z: [0..<PPWI] real(32) = noinit;
+      var lpos_x: [0:int(32)..<PPWI] real(32) = noinit;
+      var lpos_y: [0:int(32)..<PPWI] real(32) = noinit;
+      var lpos_z: [0:int(32)..<PPWI] real(32) = noinit;
 
-      foreach l in 0:int(32)..<PPWI:int(32) {
+      foreach l in 0:int(32)..<PPWI {
         lpos_x[l] = transform(0, 3, l)
           + l_atom.x * transform(0, 0, l)
           + l_atom.y * transform(0, 1, l)
@@ -575,23 +582,23 @@ module Bude {
       }
 
     // Loop over protein atoms
-      foreach ip in 0..<natpro {
+      for ip in 0..<natpro {
         // Load protein atom data
         const p_atom = protein(ip);
         const p_params = forcefield(p_atom.aType);
 
         const radij = p_params.radius + l_params.radius;
-        const r_radij = 1.0 / radij;
+        const r_radij = ONE / radij;
 
         const elcdst = if
           p_params.hbtype == HBTYPE_F && l_params.hbtype == HBTYPE_F
-          then 4.0: real(32)
-          else 2.0: real(32);
+          then FOUR
+          else TWO;
 
         const elcdst1 = if
           p_params.hbtype == HBTYPE_F && l_params.hbtype == HBTYPE_F
-          then 0.25: real(32)
-          else 0.5: real(32);
+          then QUARTER
+          else HALF;
 
         const type_E = p_params.hbtype == HBTYPE_E || l_params.hbtype == HBTYPE_E;
         const phphb_ltz = p_params.hphb <  0;
@@ -599,10 +606,10 @@ module Bude {
         const phphb_nz  = p_params.hphb != 0;
 
         const p_hphb = p_params.hphb 
-          * if phphb_ltz && lhphb_gtz then -1.0: real(32) else 1.0: real(32);
+          * if phphb_ltz && lhphb_gtz then -ONE else ONE;
 
         const l_hphb = l_params.hphb 
-          * if phphb_gtz && lhphb_ltz then -1.0: real(32) else 1.0: real(32);
+          * if phphb_gtz && lhphb_ltz then -ONE else ONE;
 
         const distdslv =
           if phphb_ltz
@@ -616,11 +623,11 @@ module Bude {
             else -max(real(32))
           );
 
-        const r_distdslv = 1.0 / distdslv;
+        const r_distdslv = ONE / distdslv;
         const chrg_init = l_params.elsc * p_params.elsc;
         const dslv_init = p_hphb + l_hphb; 
 
-        foreach l in 0..<PPWI {
+        foreach l in 0:int(32)..<PPWI {
           // Calculate distance between atoms
           const x = lpos_x(l) - p_atom.x;
           const y = lpos_y(l) - p_atom.y;
@@ -629,39 +636,39 @@ module Bude {
 
           // Calculate the sum of the sphere radii
           const distbb = distij - radij;
-          const zone1 = distbb < 0.0: real(32);
+          const zone1 = distbb < ZERO;
 
           // Calculate steric energy
-          etot[l] += (1.0 - distij * r_radij)
-            * if zone1 then 2.0: real(32) * HARDNESS else 0.0: real(32);
+          etot[l] += (ONE - distij * r_radij)
+            * if zone1 then TWO * HARDNESS else ZERO;
 
           // Calculate formal and dipole charge interactions
           var chrg_e =
             chrg_init * (
               if zone1 
-              then 1.0: real(32)
-                else 1.0: real(32) - distbb * elcdst1
+              then ONE
+                else ONE - distbb * elcdst1
             ) * (
               if distbb < elcdst 
-              then 1.0: real(32)
-              else 0.0: real(32)
+              then ONE
+              else ZERO
             );
           
-          var neg_chrg_e = -abs(chrg_e);
+          const neg_chrg_e = -abs(chrg_e);
           chrg_e = if type_E then neg_chrg_e else chrg_e;
           etot[l] += chrg_e * CNSTNT;
 
-          const coeff = 1.0 - distbb * r_distdslv;
+          const coeff = ONE - distbb * r_distdslv;
           var dslv_e = dslv_init 
-            * if distbb < distdslv && phphb_nz then 1.0: real(32) else 0.0: real(32);
+            * if distbb < distdslv && phphb_nz then ONE else ZERO;
 
-          dslv_e *= if zone1 then 1.0: real(32) else coeff;
+          dslv_e *= if zone1 then ONE else coeff;
           etot[l] += dslv_e;
         }
       }
     }
 
-    results[group * PPWI..<(group + 1) * PPWI] = 0.5 : real(32) * etot;
+    results[group * PPWI..<(group + 1) * PPWI] = etot * HALF;
   }
 
   proc openFile(fileName: string, ref length: int): file {
