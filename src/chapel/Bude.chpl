@@ -327,153 +327,14 @@ module Bude {
 
       times[gpuID] = timestampMS();
       for i in 0..<iterations {
-        foreach ii in 0..<nposes/PPWI {
+        @assertOnGpu foreach group in 0..<nposes/PPWI {
           __primitive("gpu set blockSize", wgsize);
-          const ind = ii * PPWI;
-          var etot: PPWI * real(32);
-          var transform: PPWI * (3 * (4 * real(32)));
+          fasten_main(natlig, natpro, protein, ligand, 
+                      poses, buffer, forcefield, group: int(32));
 
-          for param jj in 0:int(32)..<PPWI {
-            const ix = ind + jj;
-            // Compute transformation matrix
-            const sx = sin(poses(0, ix));
-            const cx = cos(poses(0, ix));
-            const sy = sin(poses(1, ix));
-            const cy = cos(poses(1, ix));
-            const sz = sin(poses(2, ix));
-            const cz = cos(poses(2, ix));
-            transform(jj)(0)(0) = cy*cz;
-            transform(jj)(0)(1) = sx*sy*cz - cx*sz;
-            transform(jj)(0)(2) = cx*sy*cz + sx*sz;
-            transform(jj)(0)(3) = poses(3, ix);
-            transform(jj)(1)(0) = cy*sz;
-            transform(jj)(1)(1) = sx*sy*sz + cx*cz;      
-            transform(jj)(1)(2) = cx*sy*sz - sx*cz;
-            transform(jj)(1)(3) = poses(4, ix);
-            transform(jj)(2)(0) = -sy;
-            transform(jj)(2)(1) = sx*cy;
-            transform(jj)(2)(2) = cx*cy;
-            transform(jj)(2)(3) = poses(5, ix);
-            etot[jj] = ZERO;
-          } // for param jj in 0:int(32)..<PPWI
-
-          // Loop over ligand atoms
-          for il in 0..<natlig {
-            // Load ligand atom data
-            const l_atom = ligand[il];
-            const l_params = forcefield[l_atom.aType];
-            const lhphb_ltz = l_params.hphb < ZERO;
-            const lhphb_gtz = l_params.hphb > ZERO;
-
-            // Transform ligand atom
-            var lpos_x: PPWI * real(32);
-            var lpos_y: PPWI * real(32);
-            var lpos_z: PPWI * real(32);
-
-            for param jj in 0:int(32)..<PPWI {
-              lpos_x[jj] = transform(jj)(0)(3)
-                + l_atom.x * transform(jj)(0)(0)
-                + l_atom.y * transform(jj)(0)(1)
-                + l_atom.z * transform(jj)(0)(2);
-
-              lpos_y[jj] = transform(jj)(1)(3)
-                + l_atom.x * transform(jj)(1)(0)
-                + l_atom.y * transform(jj)(1)(1)
-                + l_atom.z * transform(jj)(1)(2);
-
-              lpos_z[jj] = transform(jj)(2)(3)
-                + l_atom.x * transform(jj)(2)(0)
-                + l_atom.y * transform(jj)(2)(1)
-                + l_atom.z * transform(jj)(2)(2);
-            } // for param jj in 0:int(32)..<PPWI
-
-            for ip in 0..<natpro {
-              const p_atom = protein[ip];
-              const p_params = forcefield[p_atom.aType];
-
-              const radij = p_params.radius + l_params.radius;
-              const r_radij = ONE / radij;
-
-              const elcdst = if
-                p_params.hbtype == HBTYPE_F && l_params.hbtype == HBTYPE_F
-                then FOUR
-                else TWO;
-
-              const elcdst1 = if
-                p_params.hbtype == HBTYPE_F && l_params.hbtype == HBTYPE_F
-                then QUARTER
-                else HALF;
-
-              const type_E = p_params.hbtype == HBTYPE_E || l_params.hbtype == HBTYPE_E;
-              const phphb_ltz = p_params.hphb <  0;
-              const phphb_gtz = p_params.hphb >  0;
-              const phphb_nz  = p_params.hphb != 0;
-
-              const p_hphb = p_params.hphb 
-                * if phphb_ltz && lhphb_gtz then -ONE else ONE;
-
-              const l_hphb = l_params.hphb 
-                * if phphb_gtz && lhphb_ltz then -ONE else ONE;
-
-              const distdslv =
-                if phphb_ltz
-                then (
-                  if lhphb_ltz
-                  then NPNPDIST
-                  else NPPDIST
-                ) else (
-                  if lhphb_ltz
-                  then NPPDIST
-                  else -max(real(32))
-                );
-
-              const r_distdslv = ONE / distdslv;
-              const chrg_init = l_params.elsc * p_params.elsc;
-              const dslv_init = p_hphb + l_hphb; 
-              
-              for param jj in 0:int(32)..<PPWI {
-                const x = lpos_x[jj] - p_atom.x;
-                const y = lpos_y[jj] - p_atom.y;
-                const z = lpos_z[jj] - p_atom.z;
-                const distij = sqrt(x*x + y*y + z*z);
-
-                const distbb = distij - radij;
-                const zone1 = distbb < ZERO;
-
-                etot[jj] += (ONE - distij * r_radij) * (if zone1 then TWO*HARDNESS else ZERO);
-
-                // Calculate formal and dipole charge interactions
-                var chrg_e =
-                  chrg_init * (
-                    if zone1 
-                    then ONE
-                      else ONE - distbb * elcdst1
-                  ) * (
-                    if distbb < elcdst 
-                    then ONE
-                    else ZERO
-                  );
-                
-                var neg_chrg_e = -abs(chrg_e);
-                chrg_e = if type_E then neg_chrg_e else chrg_e;
-                etot[jj] += chrg_e * CNSTNT;
-
-                const coeff = ONE - distbb * r_distdslv;
-                var dslv_e = dslv_init 
-                  * if distbb < distdslv && phphb_nz then ONE else ZERO;
-
-                dslv_e *= if zone1 then ONE else coeff;
-                etot[jj] += dslv_e;                  
-              } // for param jj in 0:int(32)..<PPWI
-            } // for ip in 0..<natpro
-          } // for il in 0..<natlig
-
-          for param jj in 0:int(32)..<PPWI {
-            buffer[ind+jj] = etot[jj] * HALF;
-          }
-        } // foreach ii in 0..<nposes/PPWI
-        results[gpuID*nposes..<(gpuID+1)*nposes] = buffer;
-      } // for iter in 0..<iterations
+        }
+      }
+      results[gpuID*nposes..<(gpuID+1)*nposes] = buffer;
       times[gpuID] = timestampMS() - times[gpuID];
     }
 
@@ -500,7 +361,7 @@ module Bude {
     // Core part of computing
     const start: real = timestampMS();
     for itr in 0..<context.iterations {
-      forall group in 0..<nposes / PPWI {
+      forall group in 0..<nposes/PPWI {
         fasten_main(natlig, natpro, protein, ligand,
                   poses, buffer, forcefield, group: int(32));
       }
@@ -513,7 +374,7 @@ module Bude {
     printTimings(end - start);
   }
 
-  private proc fasten_main (
+  private inline proc fasten_main(
     const in natlig: int(32),
     const in natpro: int(32),
     const ref protein: [] atom,
@@ -523,8 +384,8 @@ module Bude {
     const ref forcefield: [] ffParams,
     const in group: int(32)) {
 
-    var transform: [0:int(32)..<3:int(32), 0:int(32)..<4:int(32), 0:int(32)..<PPWI] real(32) = noinit;
-    var etot: [0:int(32)..<PPWI] real(32) = noinit;
+    var etot: PPWI * real(32);
+    var transform: 3 * (4 * (PPWI * real(32)));
 
     // Compute transformation matrix
     foreach i in 0:int(32)..<PPWI {
@@ -535,18 +396,18 @@ module Bude {
       const cy = cos(transforms(1, ix));
       const sz = sin(transforms(2, ix));
       const cz = cos(transforms(2, ix));
-      transform(0, 0, i) = cy*cz;
-      transform(0, 1, i) = sx*sy*cz - cx*sz;
-      transform(0, 2, i) = cx*sy*cz + sx*sz;
-      transform(0, 3, i) = transforms(3, ix);
-      transform(1, 0, i) = cy*sz;
-      transform(1, 1, i) = sx*sy*sz + cx*cz;      
-      transform(1, 2, i) = cx*sy*sz - sx*cz;
-      transform(1, 3, i) = transforms(4, ix);
-      transform(2, 0, i) = -sy;
-      transform(2, 1, i) = sx*cy;
-      transform(2, 2, i) = cx*cy;
-      transform(2, 3, i) = transforms(5, ix);
+      transform[0][0][i] = cy*cz;
+      transform[0][1][i] = sx*sy*cz - cx*sz;
+      transform[0][2][i] = cx*sy*cz + sx*sz;
+      transform[0][3][i] = transforms(3, ix);
+      transform[1][0][i] = cy*sz;
+      transform[1][1][i] = sx*sy*sz + cx*cz;      
+      transform[1][2][i] = cx*sy*sz - sx*cz;
+      transform[1][3][i] = transforms(4, ix);
+      transform[2][0][i] = -sy;
+      transform[2][1][i] = sx*cy;
+      transform[2][2][i] = cx*cy;
+      transform[2][3][i] = transforms(5, ix);
 
       etot[i] = ZERO;
     }
@@ -560,25 +421,25 @@ module Bude {
       const lhphb_gtz = l_params.hphb > ZERO;
 
       // Transform ligand atom
-      var lpos_x: [0:int(32)..<PPWI] real(32) = noinit;
-      var lpos_y: [0:int(32)..<PPWI] real(32) = noinit;
-      var lpos_z: [0:int(32)..<PPWI] real(32) = noinit;
+      var lpos_x: PPWI * real(32);
+      var lpos_y: PPWI * real(32);
+      var lpos_z: PPWI * real(32);
 
-      foreach l in 0:int(32)..<PPWI {
-        lpos_x[l] = transform(0, 3, l)
-          + l_atom.x * transform(0, 0, l)
-          + l_atom.y * transform(0, 1, l)
-          + l_atom.z * transform(0, 2, l);
+      foreach i in 0:int(32)..<PPWI {
+        lpos_x[i] = transform[0][3][i]
+          + l_atom.x * transform[0][0][i]
+          + l_atom.y * transform[0][1][i]
+          + l_atom.z * transform[0][2][i];
 
-        lpos_y[l] = transform(1, 3, l)
-          + l_atom.x * transform(1, 0, l)
-          + l_atom.y * transform(1, 1, l)
-          + l_atom.z * transform(1, 2, l);
+        lpos_y[i] = transform[1][3][i]
+          + l_atom.x * transform[1][0][i]
+          + l_atom.y * transform[1][1][i]
+          + l_atom.z * transform[1][2][i];
 
-        lpos_z[l] = transform(2, 3, l)
-          + l_atom.x * transform(2, 0, l)
-          + l_atom.y * transform(2, 1, l)
-          + l_atom.z * transform(2, 2, l);
+        lpos_z[i] = transform[2][3][i]
+          + l_atom.x * transform[2][0][i]
+          + l_atom.y * transform[2][1][i]
+          + l_atom.z * transform[2][2][i];
       }
 
     // Loop over protein atoms
@@ -627,11 +488,11 @@ module Bude {
         const chrg_init = l_params.elsc * p_params.elsc;
         const dslv_init = p_hphb + l_hphb; 
 
-        foreach l in 0:int(32)..<PPWI {
+        foreach i in 0:int(32)..<PPWI {
           // Calculate distance between atoms
-          const x = lpos_x(l) - p_atom.x;
-          const y = lpos_y(l) - p_atom.y;
-          const z = lpos_z(l) - p_atom.z;
+          const x = lpos_x[i] - p_atom.x;
+          const y = lpos_y[i] - p_atom.y;
+          const z = lpos_z[i] - p_atom.z;
           const distij = sqrt(x * x + y * y + z* z); 
 
           // Calculate the sum of the sphere radii
@@ -639,7 +500,7 @@ module Bude {
           const zone1 = distbb < ZERO;
 
           // Calculate steric energy
-          etot[l] += (ONE - distij * r_radij)
+          etot[i] += (ONE - distij * r_radij)
             * if zone1 then TWO * HARDNESS else ZERO;
 
           // Calculate formal and dipole charge interactions
@@ -656,19 +517,21 @@ module Bude {
           
           const neg_chrg_e = -abs(chrg_e);
           chrg_e = if type_E then neg_chrg_e else chrg_e;
-          etot[l] += chrg_e * CNSTNT;
+          etot[i] += chrg_e * CNSTNT;
 
           const coeff = ONE - distbb * r_distdslv;
           var dslv_e = dslv_init 
             * if distbb < distdslv && phphb_nz then ONE else ZERO;
 
           dslv_e *= if zone1 then ONE else coeff;
-          etot[l] += dslv_e;
+          etot[i] += dslv_e;
         }
       }
     }
 
-    results[group * PPWI..<(group + 1) * PPWI] = etot * HALF;
+    foreach i in 0:int(32)..<PPWI {
+      results[group*PPWI+i] = etot[i] * HALF;
+    }
   }
 
   proc openFile(fileName: string, ref length: int): file {
