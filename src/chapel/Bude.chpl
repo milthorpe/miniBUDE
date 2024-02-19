@@ -384,12 +384,13 @@ module Bude {
     const ref forcefield: [] ffParams,
     const in group: int(32)) {
 
+    const offset = group * PPWI;
     var etot: PPWI * real(32);
     var transform: 3 * (4 * (PPWI * real(32)));
 
     // Compute transformation matrix
-    foreach i in 0:int(32)..<PPWI {
-      const ix = group*PPWI + i;
+    for param i in 0:int(32)..<PPWI {
+      const ix = offset + i;
       const sx = sin(transforms(0, ix));
       const cx = cos(transforms(0, ix));
       const sy = sin(transforms(1, ix));
@@ -425,7 +426,7 @@ module Bude {
       var lpos_y: PPWI * real(32);
       var lpos_z: PPWI * real(32);
 
-      foreach i in 0:int(32)..<PPWI {
+      for param i in 0:int(32)..<PPWI {
         lpos_x[i] = transform[0][3][i]
           + l_atom.x * transform[0][0][i]
           + l_atom.y * transform[0][1][i]
@@ -488,7 +489,7 @@ module Bude {
         const chrg_init = l_params.elsc * p_params.elsc;
         const dslv_init = p_hphb + l_hphb; 
 
-        foreach i in 0:int(32)..<PPWI {
+        for param i in 0:int(32)..<PPWI {
           // Calculate distance between atoms
           const x = lpos_x[i] - p_atom.x;
           const y = lpos_y[i] - p_atom.y;
@@ -529,8 +530,8 @@ module Bude {
       }
     }
 
-    foreach i in 0:int(32)..<PPWI {
-      results[group*PPWI+i] = etot[i] * HALF;
+    for param i in 0:int(32)..<PPWI {
+      results[offset+i] = etot[i] * HALF;
     }
   }
 
