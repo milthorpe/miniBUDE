@@ -7,7 +7,7 @@ MAKEFLAGS += --warn-undefined-variables --no-builtin-rules
 
 PPWI=4
 OPTIONS = 
-CHPL_FLAGS=-s PPWI=$(PPWI) --detailed-errors --savec tmp --print-commands
+CHPL_FLAGS+=-s PPWI=$(PPWI) --detailed-errors --savec tmp --print-commands
 CHPL_SOURCE=Bude.chpl
 ifeq ($(CHPL_LOCALE_MODEL),gpu)
 # GPU version
