@@ -162,7 +162,7 @@ module Bude {
       aFile = openFile(this.deckDir + FILE_LIGAND, length);
       this.natlig = length / c_sizeof(atom): int;
       this.ligandDomain = {0..<this.natlig};
-      reader = aFile.reader(region=0.., deserializer=new binaryDeserializer());
+      reader = aFile.reader(region=0.., deserializer=new binaryDeserializer(), locking=false);
       reader.read(this.ligand);
       reader.close(); aFile.close();
 
@@ -170,7 +170,7 @@ module Bude {
       aFile = openFile(this.deckDir + FILE_PROTEIN, length);
       this.natpro = length / c_sizeof(atom): int;
       this.proteinDomain = {0..<this.natpro};
-      reader = aFile.reader(region=0.., deserializer=new binaryDeserializer());
+      reader = aFile.reader(region=0.., deserializer=new binaryDeserializer(), locking=false);
       reader.read(this.protein);
       reader.close(); aFile.close();
 
@@ -178,14 +178,14 @@ module Bude {
       aFile = openFile(this.deckDir + FILE_FORCEFIELD, length);
       this.ntypes = length / c_sizeof(ffParams): int;
       this.forcefieldDomain = {0..<this.ntypes};
-      reader = aFile.reader(region=0.., deserializer=new binaryDeserializer());
+      reader = aFile.reader(region=0.., deserializer=new binaryDeserializer(), locking=false);
       reader.read(this.forcefield);
       reader.close(); aFile.close();
 
       // Read poses
       this.posesDomain = {0..<6, 0..<this.nposes};
       aFile = openFile(this.deckDir + FILE_POSES, length);
-      reader = aFile.reader(region=0.., deserializer=new binaryDeserializer());
+      reader = aFile.reader(region=0.., deserializer=new binaryDeserializer(), locking=false);
       var available = (length / (6 * c_sizeof(real(32)): int));
       var current = 0;
       while (current < this.nposes) {
@@ -282,7 +282,7 @@ module Bude {
       writeln("Only validating the first ", REF_NPOSES, " poses");
       n_ref_poses = REF_NPOSES;
     }
-    var reader = try! ref_energies.reader();
+    var reader = try! ref_energies.reader(locking=false);
     for i in 0..<n_ref_poses {
       try! reader.read(e);
       if (abs(e) < 1.0 && abs(energies(i)) < 1.0) {
