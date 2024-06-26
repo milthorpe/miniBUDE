@@ -389,7 +389,7 @@ module Bude {
     var transform: 3 * (4 * (PPWI * real(32)));
 
     // Compute transformation matrix
-    for param i in 0:int(32)..<PPWI {
+    foreach i in 0:int(32)..<PPWI with (ref transform, ref etot) {
       const ix = offset + i;
       const sx = sin(transforms(0, ix));
       const cx = cos(transforms(0, ix));
@@ -426,7 +426,7 @@ module Bude {
       var lpos_y: PPWI * real(32);
       var lpos_z: PPWI * real(32);
 
-      for param i in 0:int(32)..<PPWI {
+      foreach i in 0:int(32)..<PPWI with (ref lpos_x, ref lpos_y, ref lpos_z) {
         lpos_x[i] = transform[0][3][i]
           + l_atom.x * transform[0][0][i]
           + l_atom.y * transform[0][1][i]
@@ -489,7 +489,7 @@ module Bude {
         const chrg_init = l_params.elsc * p_params.elsc;
         const dslv_init = p_hphb + l_hphb; 
 
-        for param i in 0:int(32)..<PPWI {
+        foreach i in 0:int(32)..<PPWI with (ref etot) {
           // Calculate distance between atoms
           const x = lpos_x[i] - p_atom.x;
           const y = lpos_y[i] - p_atom.y;
@@ -530,7 +530,7 @@ module Bude {
       }
     }
 
-    for param i in 0:int(32)..<PPWI {
+    foreach i in 0:int(32)..<PPWI with (ref etot) {
       results[offset+i] = etot[i] * HALF;
     }
   }
